@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: front-aula-14
+  namespace: aula-14
+  labels:
+    app: front-aula-14
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: front-aula-14
+  template:
+    metadata:
+      labels:
+        app: front-aula-14
+    spec:
+      containers:
+        - name: front
+          # Imagem construída localmente e carregada com "kind load docker-image"
+          image: front-aula-14:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi

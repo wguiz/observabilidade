@@ -1,0 +1,90 @@
+# Receptor de webhook simples: recebe as notificações do Alertmanager
+# e imprime no log de forma legível. Em produção seria Slack, Teams,
+# e-mail, PagerDuty, Opsgenie...
+#   kubectl logs -n monitoring deploy/alerta-webhook -f
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alerta-webhook
+  namespace: monitoring
+data:
+  receptor.py: |
+    import json, sys
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from datetime import datetime
+
+    class Receptor(BaseHTTPRequestHandler):
+        def do_POST(self):
+            corpo = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            dados = json.loads(corpo or b"{}")
+            agora = datetime.now().strftime("%H:%M:%S")
+            receiver = self.path.strip("/")
+            print()
+            print(f"=== {agora} | receiver: {receiver} | {len(dados.get('alerts', []))} alerta(s) ===")
+            for a in dados.get("alerts", []):
+                l, an = a.get("labels", {}), a.get("annotations", {})
+                estado = "[FIRING]  " if a.get("status") == "firing" else "[RESOLVED]"
+                print(f"{estado} {l.get('alertname')}  severity={l.get('severity', '-')}  namespace={l.get('namespace', '-')}")
+                if an.get("summary"):
+                    print("           " + an["summary"])
+                if an.get("description"):
+                    print("           " + an["description"])
+            sys.stdout.flush()
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    print("Receptor de alertas ouvindo na porta 8080", flush=True)
+    HTTPServer(("", 8080), Receptor).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alerta-webhook
+  namespace: monitoring
+  labels:
+    app: alerta-webhook
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: alerta-webhook
+  template:
+    metadata:
+      labels:
+        app: alerta-webhook
+    spec:
+      containers:
+        - name: receptor
+          image: python:3.12-alpine
+          command: ["python", "-u", "/app/receptor.py"]
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: codigo
+              mountPath: /app
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+      volumes:
+        - name: codigo
+          configMap:
+            name: alerta-webhook
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alerta-webhook
+  namespace: monitoring
+spec:
+  selector:
+    app: alerta-webhook
+  ports:
+    - port: 8080
+      targetPort: 8080

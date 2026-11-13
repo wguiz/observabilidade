@@ -1,0 +1,18 @@
+# ServiceMonitor (CRD do Prometheus Operator): diz ao Prometheus
+# "faça scrape dos endpoints do Service com label app=front-aula-14".
+# O Operator transforma isso em scrape_config automaticamente.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: front-aula-14
+  namespace: aula-14
+  labels:
+    app: front-aula-14
+spec:
+  selector:
+    matchLabels:
+      app: front-aula-14
+  endpoints:
+    - port: http          # nome da porta no Service
+      path: /metrics
+      interval: 15s

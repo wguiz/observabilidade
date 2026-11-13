@@ -1,0 +1,45 @@
+# Gera tráfego contínuo no front para termos dados nos gráficos.
+# Pausar:  kubectl scale deploy/gerador-carga --replicas=0
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gerador-carga
+  namespace: aula-14
+  labels:
+    app: gerador-carga
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gerador-carga
+  template:
+    metadata:
+      labels:
+        app: gerador-carga
+    spec:
+      containers:
+        - name: curl
+          image: curlimages/curl:8.11.1
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              URL=http://front-aula-14
+              JSON="Content-Type: application/json"
+              echo "Gerando carga em $URL"
+              while true; do
+                curl -s -o /dev/null "$URL/api/produtos"
+                curl -s -o /dev/null "$URL/api/produtos?ordenar=preco"
+                curl -s -o /dev/null "$URL/api/produtos/$(( $(date +%s) % 6 + 1 ))"
+                curl -s -o /dev/null "$URL/api/status-estoque"
+                curl -s -o /dev/null -X POST -H "$JSON" -d '{"itens":[{"id":1,"quantidade":1},{"id":3,"quantidade":2}],"cupom":"DEVOPS10"}' "$URL/api/carrinho/total"
+                curl -s -o /dev/null -X POST -H "$JSON" -d '{"itens":[{"id":4,"quantidade":1}]}' "$URL/api/carrinho/total"
+                curl -s -o /dev/null "$URL/"
+                sleep 0.5
+              done
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 32Mi

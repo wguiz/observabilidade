@@ -1,0 +1,5 @@
+# Namespace próprio do laboratório: não mistura com o seu front (namespace default)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aula-14

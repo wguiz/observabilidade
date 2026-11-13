@@ -1,0 +1,94 @@
+# PrometheusRule (CRD do Prometheus Operator): regras de gravação
+# (recording rules) e regras de alerta (alerting rules) em PromQL.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: front-aula-14
+  namespace: aula-14
+  labels:
+    app: front-aula-14
+spec:
+  groups:
+    # -----------------------------------------------------------------------
+    # Recording rules: pré-calculam consultas caras / muito usadas.
+    # Convenção de nome: nivel:metrica:operacao
+    # -----------------------------------------------------------------------
+    - name: front-aula-14.recording
+      interval: 15s
+      rules:
+        - record: job:http_requests:rate2m
+          expr: sum by (job, namespace) (rate(http_requests_total{job="front-aula-14"}[2m]))
+
+        - record: job:http_requests_erros:ratio_rate2m
+          expr: |
+            sum by (job, namespace) (rate(http_requests_total{job="front-aula-14", status_code=~"5.."}[2m]))
+            /
+            sum by (job, namespace) (rate(http_requests_total{job="front-aula-14"}[2m]))
+
+        - record: job:http_request_duration_seconds:p95_2m
+          expr: |
+            histogram_quantile(0.95,
+              sum by (job, namespace, le) (rate(http_request_duration_seconds_bucket{job="front-aula-14"}[2m])))
+
+    # -----------------------------------------------------------------------
+    # Alerting rules
+    #   expr        -> condição em PromQL (alerta existe enquanto retornar algo)
+    #   for         -> quanto tempo a condição precisa durar (Pending -> Firing)
+    #   labels      -> usados pelo Alertmanager para ROTEAR
+    #   annotations -> texto para humanos (resumo, descrição, runbook)
+    # -----------------------------------------------------------------------
+    - name: front-aula-14.alertas
+      rules:
+        - alert: FrontForaDoAr
+          # Com 0 réplicas não existe alvo nem série "up": o absent() cobre esse caso
+          expr: |
+            sum by (namespace) (up{job="front-aula-14"}) == 0
+            or absent(up{job="front-aula-14"})
+          for: 1m
+          labels:
+            severity: critical
+            equipe: front
+            namespace: aula-14
+          annotations:
+            summary: "Front da loja fora do ar"
+            description: "Nenhuma réplica do front-aula-14 responde ao Prometheus há mais de 1 minuto."
+
+        - alert: FrontReplicaIndisponivel
+          expr: sum by (namespace) (up{job="front-aula-14"}) < 2
+          for: 1m
+          labels:
+            severity: warning
+            equipe: front
+          annotations:
+            summary: "Front rodando com réplicas a menos"
+            description: "Apenas {{ $value }} de 2 réplicas estão respondendo."
+
+        - alert: FrontTaxaDeErroAlta
+          expr: job:http_requests_erros:ratio_rate2m{job="front-aula-14"} > 0.05
+          for: 1m
+          labels:
+            severity: critical
+            equipe: front
+          annotations:
+            summary: "Taxa de erro HTTP 5xx acima de 5%"
+            description: "{{ $value | humanizePercentage }} das requisições estão falhando com 5xx."
+
+        - alert: FrontLatenciaAlta
+          expr: job:http_request_duration_seconds:p95_2m{job="front-aula-14"} > 0.5
+          for: 1m
+          labels:
+            severity: warning
+            equipe: front
+          annotations:
+            summary: "Latência p95 acima de 500ms"
+            description: "O percentil 95 da latência está em {{ $value | humanizeDuration }}."
+
+        - alert: ProdutoEsgotado
+          expr: max by (namespace, produto) (loja_estoque_produto) == 0
+          for: 30s
+          labels:
+            severity: info
+            equipe: front
+          annotations:
+            summary: "Produto {{ $labels.produto }} esgotado"
+            description: "O estoque de {{ $labels.produto }} chegou a zero. Avisar o time de compras."

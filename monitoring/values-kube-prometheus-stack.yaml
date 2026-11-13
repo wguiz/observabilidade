@@ -1,0 +1,115 @@
+# Values do chart kube-prometheus-stack para o laboratório da Aula 14.
+# Lido pelo Terraform (iac/main.tf). A senha do Grafana vem da variável
+# grafana_senha (padrão: aula14), não deste arquivo.
+
+# ---------------------------------------------------------------------------
+# Componentes do control plane que o kind não expõe para scraping
+# (escutam em 127.0.0.1 dentro do nó). Desligados para não gerar alertas falsos.
+# ---------------------------------------------------------------------------
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+defaultRules:
+  rules:
+    etcd: false
+    kubeControllerManager: false
+    kubeSchedulerAlerting: false
+    kubeSchedulerRecording: false
+    kubeProxy: false
+    windows: false
+
+# ---------------------------------------------------------------------------
+# Prometheus
+# ---------------------------------------------------------------------------
+prometheus:
+  service:
+    type: NodePort
+    nodePort: 30090
+  prometheusSpec:
+    # Intervalos curtos para a demonstração em aula ficar ágil
+    scrapeInterval: 15s
+    evaluationInterval: 15s
+    retention: 2d
+    # Descobre ServiceMonitors / PodMonitors / PrometheusRules de QUALQUER
+    # namespace, sem exigir o label "release: monitoring"
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    resources:
+      requests:
+        cpu: 100m
+        memory: 400Mi
+
+# ---------------------------------------------------------------------------
+# Alertmanager
+# ---------------------------------------------------------------------------
+alertmanager:
+  service:
+    type: NodePort
+    nodePort: 30903
+  config:
+    global:
+      resolve_timeout: 5m
+    route:
+      # Agrupa alertas com o mesmo nome e namespace em uma única notificação
+      group_by: ["alertname", "namespace"]
+      group_wait: 10s       # espera antes de enviar o 1º alerta do grupo
+      group_interval: 1m    # espera antes de mandar novidades do mesmo grupo
+      repeat_interval: 1h   # reenvia se o alerta continuar disparando
+      receiver: plantao-cluster
+      routes:
+        # Watchdog é um alerta que SEMPRE dispara: prova que o pipeline de
+        # alertas está vivo. Não queremos notificação dele.
+        - receiver: "null"
+          matchers: ['alertname =~ "Watchdog|InfoInhibitor"']
+        # Alertas da nossa aplicação vão para o "time do front"
+        - receiver: time-front
+          matchers: ['equipe = "front"']
+          group_wait: 5s
+          routes:
+            - receiver: time-front-critico
+              matchers: ['severity = "critical"']
+    inhibit_rules:
+      # Se o front inteiro caiu, não faz sentido avisar também de latência/erro
+      - source_matchers: ['alertname = "FrontForaDoAr"']
+        target_matchers: ['equipe = "front"', 'alertname != "FrontForaDoAr"']
+        equal: ["namespace"]
+    receivers:
+      - name: "null"
+      # Os três receivers apontam para o mesmo webhook (alerta-webhook),
+      # mudando só o caminho, para enxergarmos o roteamento nos logs.
+      - name: plantao-cluster
+        webhook_configs:
+          - url: http://alerta-webhook.monitoring.svc:8080/plantao-cluster
+            send_resolved: true
+      - name: time-front
+        webhook_configs:
+          - url: http://alerta-webhook.monitoring.svc:8080/time-front
+            send_resolved: true
+      - name: time-front-critico
+        webhook_configs:
+          - url: http://alerta-webhook.monitoring.svc:8080/time-front-critico
+            send_resolved: true
+
+# ---------------------------------------------------------------------------
+# Grafana
+# ---------------------------------------------------------------------------
+grafana:
+  adminUser: admin
+  defaultDashboardsTimezone: browser
+  service:
+    type: NodePort
+    nodePort: 30300
+  sidecar:
+    dashboards:
+      # Qualquer ConfigMap com o label grafana_dashboard: "1" vira dashboard
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: ALL

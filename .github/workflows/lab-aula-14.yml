@@ -1,0 +1,143 @@
+name: Lab Aula 14 (front + Prometheus, Grafana, Alertmanager)
+
+# Roda no runner self-hosted da VM Ubuntu, onde está o cluster kind.
+# Funciona com o lab na RAIZ do repositório ou na subpasta lab/ (detectado sozinho).
+#
+# Opcional, em Settings > Secrets and variables > Actions:
+#   Variables:  KIND_CLUSTER   nome do cluster kind (vazio: usa o único cluster que existir)
+#   Secrets:    GRAFANA_SENHA  senha do admin do Grafana (padrão: aula14)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "lab/**"
+      - "front/**"
+      - "iac/**"
+      - "manifestos/**"
+      - "monitoring/**"
+      - "scripts/**"
+      - ".github/workflows/lab-aula-14.yml"
+  workflow_dispatch:
+    inputs:
+      acao:
+        description: "O que fazer"
+        type: choice
+        options: [subir, verificar, caos, derrubar]
+        default: subir
+      experimento:
+        description: "Experimento de caos (só para acao = caos)"
+        type: choice
+        options: [erro, latencia, desligar, replica, fora-do-ar, matar-pod, restaurar, status, alertas]
+        default: erro
+      valor:
+        description: "Valor do experimento: taxa de erro (0.3) ou latência em ms (900). Vazio = padrão"
+        type: string
+        required: false
+
+# Uma execução por vez (subir, caos e derrubar não podem rodar juntos)
+concurrency:
+  group: lab-aula-14
+  cancel-in-progress: false
+
+env:
+  KIND_CLUSTER: ${{ vars.KIND_CLUSTER }}
+  GRAFANA_SENHA: ${{ secrets.GRAFANA_SENHA || 'aula14' }}
+
+jobs:
+  subir:
+    name: Subir lab
+    if: github.event_name == 'push' || inputs.acao == 'subir'
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Localizar a pasta do lab
+        run: if [ -f lab/scripts/subir.sh ]; then echo "LAB=lab" >> "$GITHUB_ENV"; else echo "LAB=." >> "$GITHUB_ENV"; fi
+
+      - name: Instalar Terraform no runner
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Verificar ferramentas
+        run: |
+          terraform version | head -1
+          docker version --format 'docker {{.Server.Version}}'
+          kind version
+          kubectl version --client
+          python3 --version
+
+      - name: Plataforma + front + alertas + dashboard
+        run: bash "$LAB/scripts/subir.sh"
+
+  verificar:
+    name: Verificar
+    needs: subir
+    # roda depois do "subir" e também sozinho quando a ação manual é "verificar"
+    if: always() && (needs.subir.result == 'success' || inputs.acao == 'verificar')
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Localizar a pasta do lab
+        run: if [ -f lab/scripts/subir.sh ]; then echo "LAB=lab" >> "$GITHUB_ENV"; else echo "LAB=." >> "$GITHUB_ENV"; fi
+
+      - name: Verificar de ponta a ponta
+        run: bash "$LAB/scripts/verificar.sh"
+
+  caos:
+    name: "Caos: ${{ inputs.experimento }}"
+    if: inputs.acao == 'caos'
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Localizar a pasta do lab
+        run: if [ -f lab/scripts/subir.sh ]; then echo "LAB=lab" >> "$GITHUB_ENV"; else echo "LAB=." >> "$GITHUB_ENV"; fi
+
+      - name: Executar experimento
+        env:
+          EXPERIMENTO: ${{ inputs.experimento }}
+          VALOR: ${{ inputs.valor }}
+        run: |
+          set -o pipefail
+          bash "$LAB/scripts/caos.sh" "$EXPERIMENTO" ${VALOR:+"$VALOR"} | tee saida.txt
+          {
+            echo "## Caos: \`$EXPERIMENTO ${VALOR}\`"
+            echo '```'; cat saida.txt; echo '```'
+            echo "Os alertas têm \`for: 1m\`: rode **caos > alertas** daqui a 1 a 3 minutos,"
+            echo "ou acompanhe na VM: \`kubectl logs -n monitoring deploy/alerta-webhook -f\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Alertas ativos e últimas notificações
+        if: always()
+        run: |
+          {
+            echo "### Alertas ativos no Alertmanager"
+            echo '```'; bash "$LAB/scripts/caos.sh" alertas; echo '```'
+            echo "### Últimas notificações recebidas pelo webhook"
+            echo '```'; kubectl logs -n monitoring deploy/alerta-webhook --tail=30; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  derrubar:
+    name: Derrubar lab
+    if: inputs.acao == 'derrubar'
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Localizar a pasta do lab
+        run: if [ -f lab/scripts/subir.sh ]; then echo "LAB=lab" >> "$GITHUB_ENV"; else echo "LAB=." >> "$GITHUB_ENV"; fi
+
+      - name: Instalar Terraform no runner
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Remover o lab
+        run: bash "$LAB/scripts/derrubar.sh"
