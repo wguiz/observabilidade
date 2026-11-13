@@ -9,7 +9,7 @@ name: Lab Aula 14 (front + Prometheus, Grafana, Alertmanager)
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - "lab/**"
       - "front/**"
